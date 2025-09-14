@@ -2,11 +2,13 @@ import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional # Make sure to import Optional
 
-import os
-import asyncio
 from google.adk.agents import Agent
 from google.adk.tools.tool_context import ToolContext
 
+from google.adk.agents.callback_context import CallbackContext
+from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
+from google.genai import types # For creating response content
 
 from google.adk.sessions import InMemorySessionService
 
@@ -46,6 +48,51 @@ session_stateful = session_service_stateful.create_session(
     session_id=SESSION_ID_STATEFUL,
     state=initial_state # <<< Initialize state during creation
 )
+
+def block_keyword_guardrail(
+    callback_context: CallbackContext, llm_request: LlmRequest
+) -> Optional[LlmResponse]:
+    """
+    Inspects the latest user message for 'BLOCK'. If found, blocks the LLM call
+    and returns a predefined LlmResponse. Otherwise, returns None to proceed.
+    """
+    agent_name = callback_context.agent_name # Get the name of the agent whose model call is being intercepted
+    print(f"--- Callback: block_keyword_guardrail running for agent: {agent_name} ---")
+
+    # Extract the text from the latest user message in the request history
+    last_user_message_text = ""
+    if llm_request.contents:
+        # Find the most recent message with role 'user'
+        for content in reversed(llm_request.contents):
+            if content.role == 'user' and content.parts:
+                # Assuming text is in the first part for simplicity
+                if content.parts[0].text:
+                    last_user_message_text = content.parts[0].text
+                    break # Found the last user message text
+
+    print(f"--- Callback: Inspecting last user message: '{last_user_message_text[:100]}...' ---") # Log first 100 chars
+
+    # --- Guardrail Logic ---
+    keyword_to_block = "BLOCK"
+    if keyword_to_block in last_user_message_text.upper(): # Case-insensitive check
+        print(f"--- Callback: Found '{keyword_to_block}'. Blocking LLM call! ---")
+        # Optionally, set a flag in state to record the block event
+        callback_context.state["guardrail_block_keyword_triggered"] = True
+        print(f"--- Callback: Set state 'guardrail_block_keyword_triggered': True ---")
+
+        # Construct and return an LlmResponse to stop the flow and send this back instead
+        return LlmResponse(
+            content=types.Content(
+                role="model", # Mimic a response from the agent's perspective
+                parts=[types.Part(text=f"I cannot process this request because it contains the blocked keyword '{keyword_to_block}'.")],
+            )
+            # Note: You could also set an error_message field here if needed
+        )
+    else:
+        # Keyword not found, allow the request to proceed to the LLM
+        print(f"--- Callback: Keyword not found. Allowing LLM call for {agent_name}. ---")
+        return None # Returning None signals ADK to continue normally
+
 
 def say_hello(name: Optional[str] = None) -> str:
     """Provides a simple greeting. If a name is provided, it will be used.
@@ -241,7 +288,7 @@ if greeting_agent and farewell_agent and 'get_weather' in globals():
     root_agent_model = MODEL_GEMINI_2_0_FLASH
 
     weather_agent_team = Agent(
-        name="weather_agent_v2", # Give it a new version name
+        name="weather_agent", # Give it a new version name
         model=root_agent_model,
         description="The main coordinator agent. Handles requests and delegates greetings/farewells to specialists.",
         instruction="You are the main agent coordinating a team. Your primary responsibility is to provide weather, city, and related information. "
@@ -254,8 +301,9 @@ if greeting_agent and farewell_agent and 'get_weather' in globals():
                     "If it's a student id request, handle it yourself using 'get_student_id'. "
                     "For anything else, respond appropriately or state you cannot handle it.",
         tools=[get_weather, get_current_time, get_student_id],
-        # Key change: Link the sub-agents here!
-        sub_agents=[greeting_agent, farewell_agent]
+        sub_agents=[greeting_agent, farewell_agent],
+        output_key="last_weather_report",
+        before_model_callback=block_keyword_guardrail
     )
     print(f"✅ Root Agent '{weather_agent_team.name}' created using model '{root_agent_model}' with sub-agents: {[sa.name for sa in weather_agent_team.sub_agents]}")
 else:
@@ -265,6 +313,8 @@ else:
     if 'get_weather' not in globals(): print(" - get_weather function is missing.")
     if 'get_current_time' not in globals(): print(" - get_current_time function is missing.")
     if 'get_student_id' not in globals(): print(" - get_student_id function is missing.")
+    if 'block_keyword_guardrail' not in globals(): print("   - 'block_keyword_guardrail' callback")
+
 
 # Ensure the root agent (e.g., 'weather_agent_team' or 'root_agent' from the previous cell) is defined.
 # Ensure the call_agent_async function is defined.
