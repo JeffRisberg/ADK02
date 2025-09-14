@@ -1,8 +1,10 @@
 import datetime
 from zoneinfo import ZoneInfo
-from typing import Optional # Make sure to import Optional
+from typing import Optional, Dict, Any # For type hints
 
 from google.adk.agents import Agent
+
+from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 
 from google.adk.agents.callback_context import CallbackContext
@@ -49,6 +51,7 @@ session_stateful = session_service_stateful.create_session(
     state=initial_state # <<< Initialize state during creation
 )
 
+
 def block_keyword_guardrail(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> Optional[LlmResponse]:
@@ -92,6 +95,49 @@ def block_keyword_guardrail(
         # Keyword not found, allow the request to proceed to the LLM
         print(f"--- Callback: Keyword not found. Allowing LLM call for {agent_name}. ---")
         return None # Returning None signals ADK to continue normally
+
+
+def block_paris_tool_guardrail(
+    tool: BaseTool, args: Dict[str, Any], tool_context: ToolContext
+) -> Optional[Dict]:
+    """
+    Checks if 'get_weather_stateful' is called for 'Paris'.
+    If so, blocks the tool execution and returns a specific error dictionary.
+    Otherwise, allows the tool call to proceed by returning None.
+    """
+    tool_name = tool.name
+    agent_name = tool_context.agent_name # Agent attempting the tool call
+    print(f"--- Callback: block_paris_tool_guardrail running for tool '{tool_name}' in agent '{agent_name}' ---")
+    print(f"--- Callback: Inspecting args: {args} ---")
+
+    # --- Guardrail Logic ---
+    target_tool_name = "get_weather_stateful" # Match the function name used by FunctionTool
+    blocked_city = "paris"
+
+    # Check if it's the correct tool and the city argument matches the blocked city
+    if tool_name == target_tool_name:
+        city_argument = args.get("city", "") # Safely get the 'city' argument
+        if city_argument and city_argument.lower() == blocked_city:
+            print(f"--- Callback: Detected blocked city '{city_argument}'. Blocking tool execution! ---")
+            # Optionally update state
+            tool_context.state["guardrail_tool_block_triggered"] = True
+            print(f"--- Callback: Set state 'guardrail_tool_block_triggered': True ---")
+
+            # Return a dictionary matching the tool's expected output format for errors
+            # This dictionary becomes the tool's result, skipping the actual tool run.
+            return {
+                "status": "error",
+                "error_message": f"Policy restriction: Weather checks for '{city_argument.capitalize()}' are currently disabled by a tool guardrail."
+            }
+        else:
+            print(f"--- Callback: City '{city_argument}' is allowed for tool '{tool_name}'. ---")
+    else:
+        print(f"--- Callback: Tool '{tool_name}' is not the target tool. Allowing. ---")
+
+
+    # If the checks above didn't return a dictionary, allow the tool to execute
+    print(f"--- Callback: Allowing tool '{tool_name}' to proceed. ---")
+    return None # Returning None allows the actual tool function to run
 
 
 def say_hello(name: Optional[str] = None) -> str:
@@ -183,6 +229,7 @@ def get_current_time(city: str) -> dict:
     mock_timezone_db = {
         "newyork": "America/New_York",
         "london": "Europe/London",
+        "paris": "Europe/Paris",
         "tokyo": "Asia/Tokyo",
         "dallas": "America/Chicago",
         "denver": "America/Denver",
@@ -303,7 +350,8 @@ if greeting_agent and farewell_agent and 'get_weather' in globals():
         tools=[get_weather, get_current_time, get_student_id],
         sub_agents=[greeting_agent, farewell_agent],
         output_key="last_weather_report",
-        before_model_callback=block_keyword_guardrail
+        before_model_callback=block_keyword_guardrail,
+        before_tool_callback=block_paris_tool_guardrail #
     )
     print(f"✅ Root Agent '{weather_agent_team.name}' created using model '{root_agent_model}' with sub-agents: {[sa.name for sa in weather_agent_team.sub_agents]}")
 else:
