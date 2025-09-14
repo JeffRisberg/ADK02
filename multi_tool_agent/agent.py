@@ -2,17 +2,13 @@ import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional # Make sure to import Optional
 
-# @title Step 0: Setup and Installation
-# Install ADK and LiteLLM for multi-model support
-
-# @title Import necessary libraries
 import os
 import asyncio
 from google.adk.agents import Agent
+from google.adk.tools.tool_context import ToolContext
+
 
 from google.adk.sessions import InMemorySessionService
-from google.adk.runners import Runner
-from google.genai import types # For creating message Content/Parts
 
 import warnings
 # Ignore all warnings
@@ -21,15 +17,35 @@ warnings.filterwarnings("ignore")
 import logging
 logging.basicConfig(level=logging.ERROR)
 
+APP_NAME = "weather_tutorial" # Consistent app name for session management
+
 # @title Define the models to use
 MODEL_GEMINI_2_0_FLASH = "gemini-2.0-flash"
 
 # More supported models can be referenced here: https://docs.litellm.ai/docs/providers/openai#openai-chat-completion-models
 MODEL_GPT_4O = "openai/gpt-4.1" # You can also try: gpt-4.1-mini, gpt-4o etc.
 
-# More supported models can be referenced here: https://docs.litellm.ai/docs/providers/anthropic
-MODEL_CLAUDE_SONNET = "anthropic/claude-sonnet-4-20250514" # You can also try: claude-opus-4-20250514 , claude-3-7-sonnet-20250219 etc
 
+# Create a NEW session service instance for this state demonstration
+session_service_stateful = InMemorySessionService()
+print("✅ New InMemorySessionService created for state demonstration.")
+
+# Define a NEW session ID for this part of the tutorial
+SESSION_ID_STATEFUL = "session_state_demo_001"
+USER_ID_STATEFUL = "user_state_demo"
+
+# Define initial state data - user prefers Celsius initially
+initial_state = {
+    "user_preference_temperature_unit": "Celsius"
+}
+
+# Create the session, providing the initial state
+session_stateful = session_service_stateful.create_session(
+    app_name=APP_NAME, # Use the consistent app name
+    user_id=USER_ID_STATEFUL,
+    session_id=SESSION_ID_STATEFUL,
+    state=initial_state # <<< Initialize state during creation
+)
 
 def say_hello(name: Optional[str] = None) -> str:
     """Provides a simple greeting. If a name is provided, it will be used.
@@ -56,36 +72,52 @@ def say_goodbye() -> str:
 
 
 # @title Define the get_weather Tool
-def get_weather(city: str) -> dict:
-    """Retrieves the current weather report for a specified city.
+def get_weather_stateful(city: str, tool_context: ToolContext) -> dict:
+    """Retrieves weather, converts temp unit based on session state."""
+    print(f"--- Tool: get_weather_stateful called for {city} ---")
 
-    Args:
-        city (str): The name of the city (e.g., "New York", "London", "Tokyo").
+    # --- Read preference from state ---
+    preferred_unit = tool_context.state.get("user_preference_temperature_unit", "Celsius") # Default to Celsius
+    print(f"--- Tool: Reading state 'user_preference_temperature_unit': {preferred_unit} ---")
 
-    Returns:
-        dict: A dictionary containing the weather information.
-              Includes a 'status' key ('success' or 'error').
-              If 'success', includes a 'report' key with weather details.
-              If 'error', includes an 'error_message' key.
-    """
-    print(f"--- Tool: get_weather called for city: {city} ---") # Log tool execution
-    city_normalized = city.lower().replace(" ", "") # Basic normalization
+    city_normalized = city.lower().replace(" ", "")
 
-    # Mock weather data
+    # Mock weather data (always stored in Celsius internally)
     mock_weather_db = {
-        "newyork": {"status": "success", "report": "The weather in New York is sunny with a temperature of 25°C."},
-        "london": {"status": "success", "report": "It's cloudy in London with a temperature of 15°C."},
-        "tokyo": {"status": "success", "report": "Tokyo is experiencing light rain and a temperature of 18°C."},
-        "dallas": {"status": "success", "report": "Dallas is sunny with a temperature of 30°C."},
-        "denver": {"status": "success", "report": "Denver is cool with a temperature of 12°C."},
-        "sydney": {"status": "success", "report": "Sydney is warm and sunny with a temperature of 22°C."},
+        "newyork": {"temp_c": 25, "condition": "sunny"},
+        "london": {"temp_c": 15, "condition": "cloudy"},
+        "tokyo": {"temp_c": 18, "condition": "light rain"},
     }
 
     if city_normalized in mock_weather_db:
-        return mock_weather_db[city_normalized]
-    else:
-        return {"status": "error", "error_message": f"Sorry, I don't have weather information for '{city}'."}
+        data = mock_weather_db[city_normalized]
+        temp_c = data["temp_c"]
+        condition = data["condition"]
 
+        # Format temperature based on state preference
+        if preferred_unit == "Fahrenheit":
+            temp_value = (temp_c * 9/5) + 32 # Calculate Fahrenheit
+            temp_unit = "°F"
+        else: # Default to Celsius
+            temp_value = temp_c
+            temp_unit = "°C"
+
+        report = f"The weather in {city.capitalize()} is {condition} with a temperature of {temp_value:.0f}{temp_unit}."
+        result = {"status": "success", "report": report}
+        print(f"--- Tool: Generated report in {preferred_unit}. Result: {result} ---")
+
+        # Example of writing back to state (optional for this tool)
+        tool_context.state["last_city_checked_stateful"] = city
+        print(f"--- Tool: Updated state 'last_city_checked_stateful': {city} ---")
+
+        return result
+    else:
+        # Handle city not found
+        error_msg = f"Sorry, I don't have weather information for '{city}'."
+        print(f"--- Tool: City '{city}' not found. ---")
+        return {"status": "error", "error_message": error_msg}
+
+get_weather = get_weather_stateful
 
 # @title Define the get_current_time Tool
 def get_current_time(city: str) -> dict:
