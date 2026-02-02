@@ -19,3 +19,4 @@ build/
 .env
 sessions.db
 
+multi_tool_agent/.adk/
