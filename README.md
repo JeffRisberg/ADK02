@@ -36,6 +36,14 @@ Then run as server (go to localhost:8000/docs to see the API docs):
 python server.py
 ```
 
+
+Example queries:
+
+```
+What is the weather in New York?
+What is the time in London?
+```
+
 # Close with deactivation of venv
 
 ```

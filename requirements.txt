@@ -1,6 +1,6 @@
-google-adk==1.23.0
+google-adk==1.26.0
 python-dotenv
-fastapi==0.123.10
+fastapi==0.125.1
 uvicorn[standard]
 sqlalchemy
 pydantic==2.12.5
